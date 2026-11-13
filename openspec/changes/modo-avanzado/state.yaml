@@ -1,0 +1,10 @@
+change: modo-avanzado
+artifact_store: openspec
+phases:
+  proposal: done
+  specs: done
+  design: done
+  tasks: done
+  apply: done
+  verify: done
+  archive: pending

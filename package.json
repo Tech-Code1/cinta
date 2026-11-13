@@ -1,0 +1,44 @@
+{
+  "name": "cinta",
+  "productName": "Cinta",
+  "version": "1.0.0",
+  "description": "Editor de vídeo para Windows con servidor MCP: corta, une, añade títulos, transiciones, filtros, música y subtítulos.",
+  "author": "Tech-Code1",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build:main": "node scripts/build-main.mjs",
+    "build:renderer": "vite build",
+    "build": "npm run build:renderer && npm run build:main",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:mcp": "npm run build && node scripts/mcp-test.mjs",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win nsis portable --publish never",
+    "dist:portable": "npm run build && electron-builder --win portable --publish never",
+    "dist:setup": "npm run build && electron-builder --win nsis --publish never",
+    "test:ui": "npm run build && electron . --selftest",
+    "icon": "node scripts/make-icon.mjs"
+  },
+  "dependencies": {
+    "@ffprobe-installer/win32-x64": "5.1.0",
+    "@resvg/resvg-js": "2.6.2",
+    "electron-updater": "6.8.11",
+    "ffmpeg-static": "5.3.0",
+    "sherpa-onnx-node": "2.0.1"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@types/node": "^22.20.5",
+    "@types/three": "0.186.0",
+    "ag-psd": "31.0.2",
+    "electron": "^45.1.0",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "polygon-clipping": "^0.15.7",
+    "three": "0.186.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "zod": "^4.6.7"
+  }
+}

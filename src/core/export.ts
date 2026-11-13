@@ -1,0 +1,148 @@
+// Running the compositor: export with progress, single frames, generated media.
+import { mkdirSync, statSync } from 'node:fs';
+import { dirname, extname, join, resolve } from 'node:path';
+import { EXPORT_PRESETS, findIn } from './catalog';
+import { runFfmpeg, ffprobePath } from './ffmpeg';
+import { cacheDir } from './graphics';
+import { uid, type Project } from './model';
+import { compile, type RenderOptions } from './render';
+import { execFileSync } from 'node:child_process';
+
+export interface ExportResult {
+  path: string;
+  duration: number;
+  size: number;
+  width?: number;
+  height?: number;
+  seconds: number;
+  /** encoder actually used (h264_nvenc when the graphics card did it) */
+  encoder?: string;
+}
+
+export async function exportProject(p: Project, o: Omit<RenderOptions, 'mode' | 'encoder'> & { hardware?: 'auto' | 'off'; onProgress?: (f: number) => void; signal?: AbortSignal }): Promise<ExportResult> {
+  const preset = typeof o.preset === 'string' || !o.preset ? findIn(EXPORT_PRESETS, (o.preset as string) ?? guessPreset(o.output), 'Preset de exportación') : o.preset;
+  let out = resolve(o.output);
+  if (!extname(out)) out += `.${preset.ext}`;
+  mkdirSync(dirname(out), { recursive: true });
+  const t0 = Date.now();
+  let encoder = o.hardware === 'off' ? null : await hardwareEncoder(preset.vcodec);
+  const run = async () => {
+    const c = await compile(p, { ...o, preset, mode: 'export', output: out, encoder: encoder ?? undefined });
+    await runFfmpeg(c.args, { cwd: c.cwd, duration: c.duration, onProgress: o.onProgress, signal: o.signal });
+  };
+  try {
+    await run();
+  } catch (e) {
+    if (!encoder || o.signal?.aborted) throw e;
+    // the graphics card refused (driver, session limit, size…): same export on the CPU
+    encoder = null;
+    await run();
+  }
+  const info = mediaInfo(out);
+  return { path: out, duration: info.duration, size: statSync(out).size, width: info.width, height: info.height, seconds: (Date.now() - t0) / 1000, encoder: encoder ?? preset.vcodec ?? preset.acodec };
+}
+
+const hwCache = new Map<string, string | null>();
+/** First GPU encoder (NVIDIA, Intel, AMD) that actually encodes on this PC for libx264/libx265, else null. */
+export async function hardwareEncoder(vcodec?: string): Promise<string | null> {
+  const family = vcodec === 'libx264' ? 'h264' : vcodec === 'libx265' ? 'hevc' : null;
+  if (!family || process.env.CINTA_NO_GPU) return null;
+  if (!hwCache.has(family)) {
+    let found: string | null = null;
+    for (const v of ['nvenc', 'qsv', 'amf']) {
+      try {
+        await runFfmpeg(['-f', 'lavfi', '-i', 'color=black:s=256x144:d=0.2', '-c:v', `${family}_${v}`, '-f', 'null', '-']);
+        found = `${family}_${v}`;
+        break;
+      } catch { /* not available here */ }
+    }
+    hwCache.set(family, found);
+  }
+  return hwCache.get(family)!;
+}
+
+function guessPreset(output: string): string {
+  const ext = extname(output).slice(1).toLowerCase();
+  const map: Record<string, string> = { mp4: 'mp4', mkv: 'mkv', mov: 'mov', avi: 'avi', wmv: 'wmv', flv: 'flv', webm: 'webm', mpg: 'mpeg2', m2ts: 'm2ts', ogv: 'ogv', gif: 'gif', mp3: 'mp3', m4a: 'aac', wav: 'wav', flac: 'flac', ogg: 'ogg', wma: 'wma' };
+  return map[ext] ?? 'mp4';
+}
+
+/** Renders one frame of the project at `time` to a PNG file (or a temp file). */
+export async function renderFrame(p: Project, time: number, o: { output?: string; width?: number; height?: number } = {}): Promise<string> {
+  const out = resolve(o.output ?? join(cacheDir('frames'), `frame_${uid('p')}.png`));
+  mkdirSync(dirname(out), { recursive: true });
+  const fps = p.settings.fps;
+  const total = projectDuration(p);
+  const t = Math.max(0, Math.min(time, Math.max(0, total - 1 / fps)));
+  const c = await compile(p, { mode: 'frame', output: out, from: t, to: Math.min(total, t + 2 / fps + 0.01), width: o.width, height: o.height });
+  await runFfmpeg(c.args, { cwd: c.cwd });
+  return out;
+}
+import { projectDuration } from './model';
+
+/** Quick facts about a rendered file (duration, size, streams). */
+export function mediaInfo(path: string): { duration: number; width?: number; height?: number; vcodec?: string; acodec?: string; fps?: number } {
+  const json = execFileSync(ffprobePath(), ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', path], { windowsHide: true }).toString();
+  const info = JSON.parse(json) as { format: { duration?: string }; streams: { codec_type: string; codec_name: string; width?: number; height?: number; avg_frame_rate?: string }[] };
+  const v = info.streams.find((s) => s.codec_type === 'video');
+  const a = info.streams.find((s) => s.codec_type === 'audio');
+  const [fa, fb] = (v?.avg_frame_rate ?? '0/1').split('/').map(Number);
+  return { duration: Number(info.format.duration ?? 0), width: v?.width, height: v?.height, vcodec: v?.codec_name, acodec: a?.codec_name, fps: fb ? fa / fb : undefined };
+}
+
+/** Royalty-free media generated by Cinta itself (backgrounds, music beds, sound effects). */
+export const GENERATED = {
+  music: ['calm', 'upbeat', 'dramatic', 'corporate', 'trap'],
+  sfx: ['whoosh', 'beep', 'pop', 'impact', 'click', 'ding', 'applause', 'riser', 'rumble', 'boom', 'zap'],
+} as const;
+
+export async function generateMedia(kind: 'music' | 'sfx' | 'tone', name: string, o: { duration?: number; output?: string } = {}): Promise<string> {
+  const d = o.duration ?? (kind === 'music' ? 60 : kind === 'tone' ? 5 : 1.2);
+  const out = resolve(o.output ?? join(cacheDir('generated'), `${kind}_${name}_${Math.round(d)}s.wav`));
+  mkdirSync(dirname(out), { recursive: true });
+  let src: string, af = '';
+  const chord = (notes: number[], bpm: number, vol = 0.12) => {
+    // a simple arpeggiated pad over a 4-chord loop, written as one aevalsrc expression
+    const beat = 60 / bpm;
+    const prog = [0, 5, 7, 3]; // I IV V vi-ish (semitones)
+    const f = (base: number) => `${base}*pow(2\\,(${prog.map((s, i) => `${s}*between(mod(t\\,${beat * 16})\\,${beat * 4 * i}\\,${beat * 4 * (i + 1)})`).join('+')})/12)`;
+    const voices = notes.map((n) => `${vol}*sin(2*PI*${f(n)}*t)*(0.6+0.4*sin(2*PI*t/${beat * 2}))`).join('+');
+    const pulse = `${vol * 0.8}*sin(2*PI*${f(notes[0] / 2)}*t)*exp(-6*mod(t\\,${beat}))`;
+    return `aevalsrc='${voices}+${pulse}|${voices}+${pulse}':s=48000:d=${d}`;
+  };
+  switch (`${kind}:${name}`) {
+    case 'music:calm': src = chord([220, 277.18, 329.63], 70, 0.1); af = 'aecho=0.8:0.6:300:0.3,lowpass=f=3000'; break;
+    case 'music:upbeat': src = chord([261.63, 329.63, 392], 118, 0.1); break;
+    case 'music:dramatic': src = chord([110, 130.81, 164.81], 60, 0.14); af = 'aecho=0.8:0.7:500:0.4'; break;
+    case 'music:corporate': src = chord([293.66, 369.99, 440], 100, 0.09); af = 'aecho=0.8:0.5:200:0.2'; break;
+    case 'music:trap': {
+      // 100 BPM: 808 kick with a pitch drop, clap on 2 and 4, rolling hi-hats, minor sub line (i–VI–III–VII)
+      const b = 0.6, bar = b * 4;
+      const sub = `55*pow(2\,(${[0, -4, 3, -2].map((st, i) => `${st}*between(mod(t\,${bar * 4})\,${bar * i}\,${bar * (i + 1)})`).join('+')})/12)`;
+      const kick = `0.9*sin(2*PI*(45+110*exp(-28*mod(t\,${b * 2})))*mod(t\,${b * 2}))*exp(-3.2*mod(t\,${b * 2}))`;
+      const clap = `0.35*(random(0)*2-1)*exp(-22*mod(t-${b}\,${b * 2}))*gte(t\,${b})`;
+      const hat = `0.12*(random(1)*2-1)*exp(-70*mod(t\,${b / 4}))*(0.6+0.4*gte(mod(t\,${bar})\,${bar - b}))`;
+      const bass = `0.35*sin(2*PI*${sub}*t)*(0.4+0.6*exp(-1.5*mod(t\,${b * 2})))`;
+      src = `aevalsrc='${kick}+${clap}+${hat}+${bass}|${kick}+${clap}+${hat}+${bass}':s=48000:d=${d}`;
+      af = 'highpass=f=25,acompressor=threshold=0.3:ratio=4:attack=5:release=120';
+      break;
+    }
+    case 'sfx:riser': src = `aevalsrc='0.35*sin(2*PI*(80*t+700*t*t/${2 * d}))*(t/${d})+0.25*(random(0)*2-1)*pow(t/${d}\,2)':s=48000:d=${d}`; af = `highpass=f=60,afade=t=out:st=${d * 0.92}:d=${d * 0.08}`; break;
+    case 'sfx:rumble': src = `anoisesrc=d=${d}:c=brown:a=0.9:seed=3`; af = `lowpass=f=160,volume=14dB,tremolo=f=7:d=0.4,alimiter=limit=0.9,afade=t=in:d=${Math.min(0.4, d / 3)},afade=t=out:st=${d * 0.7}:d=${d * 0.3}`; break;
+    case 'sfx:boom': src = `aevalsrc='0.95*sin(2*PI*(38+140*exp(-10*t))*t)*exp(-2.2*t)+0.5*(random(0)*2-1)*exp(-9*t)':s=48000:d=${Math.max(d, 1.5)}`; af = 'lowpass=f=900,alimiter=limit=0.95'; break;
+    case 'sfx:zap': src = `aevalsrc='0.45*(random(0)*2-1)*gt(sin(2*PI*37*t)+sin(2*PI*61*t)\,0.6)*exp(-3*t)+0.2*sin(2*PI*(1800+900*sin(2*PI*23*t))*t)*exp(-8*t)':s=48000:d=${Math.min(d, 0.8)}`; af = 'highpass=f=300'; break;
+    case 'sfx:whoosh': src = `anoisesrc=d=${d}:c=pink:a=0.9:seed=7`; af = `bandpass=f=1200:w=1600,volume=24dB,alimiter=limit=0.95,afade=t=in:d=${d * 0.6},afade=t=out:st=${d * 0.6}:d=${d * 0.4}`; break;
+    case 'sfx:beep': src = `sine=f=1000:d=${Math.min(d, 0.4)}`; af = 'afade=t=out:st=0.3:d=0.1'; break;
+    case 'sfx:pop': src = `aevalsrc='0.8*sin(2*PI*(400+1200*exp(-30*t))*t)*exp(-25*t)':s=48000:d=${Math.min(d, 0.4)}`; break;
+    case 'sfx:impact': src = `aevalsrc='0.9*sin(2*PI*(55+80*exp(-8*t))*t)*exp(-4*t)':s=48000:d=${d}`; af = 'lowpass=f=400'; break;
+    case 'sfx:click': src = `aevalsrc='0.7*sin(2*PI*2000*t)*exp(-200*t)':s=48000:d=0.15`; break;
+    case 'sfx:ding': src = `aevalsrc='0.4*sin(2*PI*1318.5*t)*exp(-3*t)+0.25*sin(2*PI*2637*t)*exp(-5*t)':s=48000:d=${Math.max(d, 1.5)}`; break;
+    case 'sfx:applause': src = `anoisesrc=d=${Math.max(d, 3)}:c=white:a=0.9`; af = `bandpass=f=2500:w=3000,volume=14dB,tremolo=f=11:d=0.6,afade=t=in:d=0.3,afade=t=out:st=${Math.max(d, 3) - 1}:d=1`; break;
+    default:
+      if (kind === 'tone') { src = `sine=f=${Number(name) || 440}:d=${d}`; break; }
+      throw new Error(`Medio generado desconocido: ${kind} «${name}». Música: ${GENERATED.music.join(', ')}; efectos: ${GENERATED.sfx.join(', ')}`);
+  }
+  if (kind === 'music') af = `${af ? `${af},` : ''}afade=t=in:d=1.5,afade=t=out:st=${Math.max(0, d - 3)}:d=3,alimiter=limit=0.8`;
+  await runFfmpeg(['-f', 'lavfi', '-i', src, ...(af ? ['-af', af] : []), '-ac', '2', '-ar', '48000', out]);
+  return out;
+}

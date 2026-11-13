@@ -1,0 +1,14 @@
+node_modules/
+dist/
+release/
+*.log
+demo/
+demo-elementos/
+demo-gnx/
+demo-formas/
+demo-luces/
+demo-estilos/
+demo-marioneta/
+parity/out/
+demo-resplandor/
+demo-texto/

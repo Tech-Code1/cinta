@@ -1,0 +1,11 @@
+change: editor-fase1
+artifact_store: openspec
+phases:
+  proposal: done
+  specs: done
+  design: done
+  tasks: done
+  apply: done
+  verify: done
+  archive: pending
+next: verify (mcp-test + selftest + packaged builds), then fase 2 (UX y funciones originales)

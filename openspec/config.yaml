@@ -1,0 +1,9 @@
+schema: spec-driven
+context: |
+  Cinta: editor de vídeo para Windows (Electron 45 + Vite 8 + TypeScript 7, esbuild para main), clon funcional de
+  Movavi Video Suite 22 «Editar vídeo». Render con ffmpeg portátil. Servidor MCP stdio. Interfaz en español.
+rules:
+  proposal: [Respetar la salvaguarda legal: replicar funciones, nunca activos de Movavi]
+  specs: [Cada requisito F1 debe tener herramienta MCP y escenario verificable por contenido]
+  design: [Un solo compositor (src/core/render) para vista previa, exportación y MCP]
+  tasks: [Pruebas e2e en scripts/mcp-test.mjs; matar solo PIDs propios; aislar con CINTA_USER_DATA]

@@ -1,0 +1,60 @@
+appId: io.github.tech-code1.cinta
+productName: Cinta
+copyright: Copyright © 2026 Tech-Code1
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - build/icon.png
+  - package.json
+  - "!node_modules/sherpa-onnx-*/**/*.pdb"
+asarUnpack:
+  # native binaries and the stdio MCP server (run by Cinta.exe as plain Node)
+  - node_modules/ffmpeg-static/**/*
+  - node_modules/@ffprobe-installer/**/*
+  - node_modules/@resvg/**/*
+  - node_modules/sherpa-onnx-*/**/*
+  - dist/main/mcp.js
+extraResources:
+  - from: LICENSE
+    to: LICENSE.txt
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+electronLanguages:
+  - es
+  - en-US
+compression: maximum
+npmRebuild: false
+# automatic updates (src/main/updates.ts): latest.yml + .blockmap go next to the installer in each GitHub Release.
+# Publishing only happens with `--publish always` and GH_TOKEN; `npm run dist` never uploads anything.
+publish:
+  provider: github
+  owner: Tech-Code1
+  repo: cinta
+  releaseType: release
+fileAssociations:
+  - ext: cinta
+    name: Proyecto de Cinta
+    description: Proyecto de Cinta
+    role: Editor
+win:
+  icon: build/icon.png
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+nsis:
+  license: LICENSE
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Cinta
+  include: build/installer.nsh
+  artifactName: ${productName}-Setup-${version}.${ext}
+portable:
+  artifactName: ${productName}-Portable-${version}.${ext}
